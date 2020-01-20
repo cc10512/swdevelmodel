@@ -1,6 +1,6 @@
 # A git-based development model
 
-Version 1.0-rc.1
+Version 1.1
 
 Git/Github have become the standard source code development tools, that allow
 teams of people to construct complex projects, run continuous intergration for
