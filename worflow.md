@@ -1,5 +1,7 @@
 # A git-based development model
 
+Version 1.0
+
 Git/Github have become the standard source code development tools, that allow
 teams of people to construct complex projects, run continuous intergration for
 testing, produce software releases, and maintain them. However, just like any
