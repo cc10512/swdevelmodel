@@ -11,14 +11,14 @@ requirements.
 One of the most popular development models is Vincent Driessen's [git-flow
 model](https://nvie.com/posts/a-successful-git-branching-model/). It is
 suitable for large projects with periodic releases. The drawbacks are:
-- it is fairly heavy for applications that are in early stages and need more 
+- it is fairly heavy for applications that are in early stages and need more
   nimble deployment;
-- does not integrate particularly well with Github -- one would have to   
+- does not integrate particularly well with Github -- one would have to
   manually synchronize with the main repository, open PRs, etc.;
-- and uses the master branch as the production branch, which is typically not 
+- and uses the master branch as the production branch, which is typically not
   playing well with different CI tools.
 
-Ultimately, git-flow is just git + a set of conventions that can be customized, 
+Ultimately, git-flow is just git + a set of conventions that can be customized,
 and thus is our favorite model with some customization:
 - to allow rapid development, we use 'master' as the development branch. This
   enables an easy Github workflow and rapid deployment when needed.
@@ -67,6 +67,7 @@ TBD
 ## References
 - [Pro Git](https://git-scm.com/book/en/v2) book
 - Vincent Driessen's [git-flow model](https://nvie.com/posts/a-successful-git-branching-model/)
+- [Git-flow on Github](https://github.com/nvie/gitflow)
 - Github's [workflow](http://scottchacon.com/2011/08/31/github-flow.html)
 - Gitlab's [workflow](https://about.gitlab.com/blog/2014/09/29/gitlab-flow/)
 - HubFlow [workflow](https://datasift.github.io/gitflow/TheHubFlowTools.html)
