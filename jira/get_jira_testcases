@@ -1,0 +1,189 @@
+#! /bin/sh
+exec scala "$0" "$@"
+!#
+
+/// Retrieve the attachments for the specified JIRAs
+
+val baseURL="https://barefootnetworks.atlassian.net/rest/api/2/"
+
+type OptionMap = Map[Symbol, String]
+
+def usage = """
+  Usage: get_jira_testcases --credentials "username:password (or username:apiToken)"
+  Optional:
+       --dest-dir <dest_dir>          (default ".")
+       --label <list of labels>
+       --project <list of projects>   (default "COMPILER,P4C")
+       --issue <issue name>           extract a single issue, e.g., "COMPILER-42"
+       --override                     override existing issues (default false)
+       --makefile-update <dir>        update Makefiles in dir with the added tests
+"""
+
+
+def listToOptionMap(lst: List[String]) : OptionMap = {
+    def nextOption(map : OptionMap, list: List[String]) : OptionMap = {
+        list match {
+            case Nil => map
+            case ("--credentials" | "-c") :: value :: tail => nextOption(map ++ Map('credentials -> value), tail)
+            case ("--dest-dir"    | "-d") :: value :: tail => nextOption(map ++ Map('destDir -> value), tail)
+            case ("--issue"       | "-i") :: value :: tail => nextOption(map ++ Map('issue -> value), tail)
+            case ("--label"       | "-l") :: value :: tail => nextOption(map ++ Map('label -> value), tail)
+            case ("--makefile-update" | "-m") :: value :: tail => nextOption(map ++ Map('makefile -> value), tail)
+            case ("--override"    | "-o") :: tail          => nextOption(map ++ Map('override -> "true"), tail)
+            case ("--project"     | "-p") :: value :: tail => nextOption(map ++ Map('project -> value), tail)
+            case ("--help"        | "-h") :: tail          => { println(usage); sys.exit(0) }
+            case option :: tail => println("Unknown option "+option)
+            sys.exit(1)
+        }
+    }
+    return nextOption(Map(), lst)
+}
+var options = listToOptionMap(args.toList)
+if( (options get 'credentials) == None) { println(usage); sys.exit(1) }
+if( (options get 'destDir) == None) options += ('destDir -> "./")
+if( (options get 'project) == None) options += ('project -> "COMPILER,BRIG")
+if( (options get 'label) == None) { println("--label is a required argument");
+                                    println(usage); sys.exit(1) }
+
+import scala.sys.process._
+import java.io.File
+import scala.io.Source
+import scala.util.parsing.json._
+
+// Alternate mode of running a command and capture both status and output
+// val issues_list = new File("issues_list.json")
+// val status = (cmd #> issues_list).!
+// println(status)
+// if (status != 0) {
+//     println("Failed to retrieve issues")
+//     sys.exit(status)
+// } else {
+//     println("success!")
+// }
+
+// update the Makefile.am and Makefile-p4c-extension.am with this test case
+// Append the test cases to the JIRA_TESTS
+def updateMakefile(testCase: String) : Boolean = {
+    val makefile_path = new File(options('makefile)).getAbsolutePath.toString.stripSuffix("/.")
+    val makefile_glass = new File(makefile_path + "/Makefile.am")
+    val makefile_brig = new File(makefile_path + "/Makefile-p4c-extension.am")
+    if(!(makefile_glass.exists && makefile_brig.exists)) {
+        println("Invalid makefile directory " + options('makefile))
+        sys.exit(1)
+    }
+
+    // compute the relative path of the test case vs. Makefile
+    val ts= testCase.stripPrefix(makefile_path)
+    val testCaseRelativePath = if(ts.startsWith("/")) "." + ts else "./" + ts
+    //  println("Makefile path: " + makefile_path)
+    // println("Testcase relative path: " + testCaseRelativePath)
+
+    def writeMakefile(makefile : File) : Boolean = {
+        // println("Updating "+makefile.getName()+ " ... ")
+        val outputStream = new java.io.FileWriter (makefile.getName() + ".tmp", false)
+        try {
+            val jira_tests = """^JIRA_TESTS\s=.*""".r
+            val all_tests = """^TESTS\s=.*""".r
+            var found : Boolean = false
+            for (line <- Source.fromFile(makefile).getLines().toList) {
+                line match {
+                    // add to JIRA_TESTS.
+                    // TBD: Would be nice to check whether the test is already there
+                    case jira_tests(_*) => {
+                        outputStream.write(line + "\n")
+                        outputStream.write("\t" + testCaseRelativePath + " \\\n")
+                        found = true
+                    }
+                    // add JIRA_TESTS in case it does not exist
+                    case all_tests(_*) => {
+                        if (!found) {
+                            outputStream.write("JIRA_TESTS = \\\n")
+                            outputStream.write("\t" + testCaseRelativePath + "\n\n")
+                            outputStream.write(line + " $(JIRA_TESTS)\n")
+                            found = true
+                        } else {
+                            outputStream.write(line + "\n")
+                        }
+
+                    }
+                    case _ => outputStream.write(line + "\n")
+                }
+            }
+            // Makefile-p4c-extensions doesn't have a TESTS decl
+            if (!found) {
+                outputStream.write("JIRA_TESTS = \\\n")
+                outputStream.write("\t" + testCaseRelativePath + "\n\n")
+                outputStream.write("TESTS += $(JIRA_TESTS)\n")
+            }
+            outputStream.close()
+            // rename Makefile.am.tmp to Makefile.am
+            new File(makefile.getName() + ".tmp").renameTo(makefile)
+            return true
+        } catch {
+            case e : Throwable => {
+                println(" failed:\n" + e)
+                e.printStackTrace()
+            }
+        } finally {
+            outputStream.close()
+        }
+        return false
+    }
+
+    writeMakefile(makefile_glass)
+    writeMakefile(makefile_brig)
+}
+
+def downloadAttachments(issueName: String) : Boolean = {
+    val getAttachments = """curl -S -s -X GET -u """ + options('credentials) + " " + baseURL +
+                         "issue/" + issueName + "?fields=attachment"
+    println("  get attachments for issue " + issueName)
+    val attachJSONString = getAttachments.!!
+    val fieldsList : Map[String,Any] = JSON.parseFull(attachJSONString).get.asInstanceOf[Map[String,Any]].get("fields").get.asInstanceOf[Map[String,Any]]
+    val attachList : List[Any] = fieldsList.get("attachment").get.asInstanceOf[List[Any]]
+    val destDir = new File(options('destDir) + "/" + issueName)
+    if ( (options get 'override) == None && destDir.exists) {
+        println("attachments already downloaded. Use --override to download again")
+        return false
+    }
+    if (! attachList.isEmpty) {
+        attachList.foreach( attachMap => {
+            val url: String = attachMap.asInstanceOf[Map[String,Any]].get("content").get.asInstanceOf[String]
+            val fileName: String = attachMap.asInstanceOf[Map[String,Any]].get("filename").get.asInstanceOf[String]
+            val filePath = destDir.getAbsolutePath.toString + "/" + fileName
+            val getAttach = "curl -s -S -L --create-dirs -u " + options('credentials) + " -o " + filePath + " " + url
+            println("   retrieving: " + filePath)
+            val rc = getAttach.!
+            if (rc != 0) return false
+            if ( (options get 'makefile) != None && (options get 'override) == None) {
+                // update the makefile if not overriding
+                updateMakefile(filePath)
+            }
+        })
+    }
+    return true
+}
+
+def downloadIssues(project: String, label: String) : Boolean = {
+    val cmd = """curl -S -X GET -H "Content-Type:application/json"""" +
+              " -u " + options('credentials) +" "+ baseURL +
+              "search?jql=project=" + project + "+AND+attachments+is+not+EMPTY" +
+              "+AND+labels=" + label
+    println("retrieving issues for: " + project)
+    val issuesJSONString = cmd.!!
+
+    val issueList : List[Any] = JSON.parseFull(issuesJSONString).get.asInstanceOf[Map[String, Any]].get("issues").get.asInstanceOf[List[Any]]
+    issueList.foreach( issuesMap => {
+        val issue : Map[String,Any] = issuesMap.asInstanceOf[Map[String,Any]]
+        val name : String = issue.get("key").get.asInstanceOf[String]
+        downloadAttachments(name)
+    })
+    return true
+}
+
+if( (options get 'issue) != None) {
+    downloadAttachments(options('issue))
+} else {
+    val projects = options('project).split(",")
+    projects.foreach(x => downloadIssues(x, options('label)))
+}

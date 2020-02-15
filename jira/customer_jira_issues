@@ -1,0 +1,97 @@
+#! /bin/sh
+exec scala "$0" "$@"
+!#
+
+val baseURL="https://barefootnetworks.atlassian.net/rest/api/2/"
+
+type OptionMap = Map[Symbol, String]
+
+def usage = """
+  Usage: customer_jira_issues --credentials "username:password"
+  Optional:
+       --project <list of projects>   (default "P4C")
+       --issue <issue name>           extract a single issue, e.g., "COMPILER-42"
+       --label <list of labels>
+       --output <filename>            (default console)
+"""
+
+
+def listToOptionMap(lst: List[String]) : OptionMap = {
+    def nextOption(map : OptionMap, list: List[String]) : OptionMap = {
+        list match {
+            case Nil => map
+            case ("--credentials" | "-c") :: value :: tail => nextOption(map ++ Map('credentials -> value), tail)
+            case ("--issue"       | "-i") :: value :: tail => nextOption(map ++ Map('issue -> value), tail)
+            case ("--label"       | "-l") :: value :: tail => nextOption(map ++ Map('label -> value), tail)
+            case ("--output"      | "-o") :: value :: tail => nextOption(map ++Map('output -> value), tail)
+            case ("--project"     | "-p") :: value :: tail => nextOption(map ++ Map('project -> value), tail)
+            case ("--help"        | "-h") :: tail          => { println(usage); sys.exit(0) }
+            case option :: tail => println("Unknown option "+option)
+            sys.exit(1)
+        }
+    }
+    return nextOption(Map(), lst)
+}
+var options = listToOptionMap(args.toList)
+if( (options get 'credentials) == None) options += ('credentials -> "cascaval@barefootnetworks.com:<api token>")
+                 // { println(usage); sys.exit(1) }
+if( (options get 'project) == None) options += ('project -> "P4C")
+if( (options get 'label) == None) { println("--label is a required argument"); println(usage); sys.exit(1) }
+
+import scala.sys.process._
+import java.io.File
+import scala.io.Source
+import scala.util.parsing.json._
+
+// Alternate mode of running a command and capture both status and output
+// val issues_list = new File("issues_list.json")
+// val status = (cmd #> issues_list).!
+// println(status)
+// if (status != 0) {
+//     println("Failed to retrieve issues")
+//     sys.exit(status)
+// } else {
+//     println("success!")
+// }
+
+def getAttr(blob: Any, key: String, defaultVal: String) : String = {
+  if (blob == None) return defaultVal
+  // println(key + " :" + blob)
+  // println("get: " + blob.asInstanceOf[Option[Map[String, Any]]].get.get(key))
+  if (blob.asInstanceOf[Option[Map[String, Any]]].get == null) return defaultVal
+  return blob.asInstanceOf[Option[Map[String, Any]]].get.get(key).get.asInstanceOf[String]
+}
+
+def downloadIssues(project: String, label: String) : Boolean = {
+    var cmd = """curl -S -X GET -H "Content-Type:application/json"""" +
+              " -u " + options('credentials) +" "+ baseURL +
+              "search?jql=project=" + project + "+AND"
+    if ((options get 'issue) != None)
+       cmd += "+Key=" + options('issue)
+    else
+       cmd += "+labels=" + label
+    System.err.println("retrieving issues for: " + project)
+    //println(cmd)
+    //sys.exit(1)
+    val issuesJSONString = cmd.!!
+
+    println("Issues: " + issuesJSONString)
+    val issueList : List[Any] = JSON.parseFull(issuesJSONString).get.asInstanceOf[Map[String, Any]].get("issues").get.asInstanceOf[List[Any]]
+    issueList.foreach( issuesMap => {
+        val issue : Map[String,Any] = issuesMap.asInstanceOf[Map[String,Any]]
+        val name : String = issue.get("key").get.asInstanceOf[String]
+        val fields : Map[String, Any] = issue.get("fields").get.asInstanceOf[Map[String,Any]]
+        val fixVersion : String = "" // issue.get("fixVersion").get.asInstanceOf[String]
+        val owner = getAttr(fields.get("assignee"), "displayName", "")
+        // println("Owner " + owner)
+        val resolution = getAttr(fields.get("resolution"), "name", "Unresolved")
+        // println("Resolution " + resolution)
+        val descr : String = fields.get("summary").get.asInstanceOf[String]
+        val url = "=HYPERLINK(\"https://barefootnetworks.atlassian.net/browse/" + name + "\",\"" + name + "\")"
+        println(url + ";;" + owner + ";;" + resolution + ";" + fixVersion + ";" + descr)
+    })
+    return true
+}
+
+val projects = options('project).split(",")
+projects.foreach(x => downloadIssues(x, options('label)))
